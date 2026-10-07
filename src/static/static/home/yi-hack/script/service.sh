@@ -3,6 +3,7 @@
 CONF_FILE="etc/system.conf"
 
 YI_HACK_PREFIX="/home/yi-hack"
+RTSP_WD_PID_FILE="/tmp/yi-hack-rtsp-wd.pid"
 
 YI_HACK_VER=$(cat /home/yi-hack/version)
 MODEL_SUFFIX=$(cat /home/yi-hack/model_suffix)
@@ -201,10 +202,7 @@ start_rtsp()
             $RTSP_DAEMON -m $MODEL_SUFFIX -r both $CODEC_LOW $CODEC_HIGH $RTSP_AUDIO_OPTION $P_RTSP_PORT $RTSP_USER $RTSP_PASSWORD $RTSP_AUDIO_BC $NR_LEVEL > /dev/null &
         fi
 
-        WD_COUNT=$(ps | grep wd.sh | grep -v grep | grep -c ^)
-        if [ $WD_COUNT -eq 0 ]; then
-            (sleep 30; $YI_HACK_PREFIX/script/wd.sh >/dev/null) &
-        fi
+        start_rtsp_watchdog
     else
 
         CODEC_LOW="h264"
@@ -224,17 +222,59 @@ start_rtsp()
             $RTSP_DAEMON -r both -i -c $CODEC_LOW -C $CODEC_HIGH $RTSP_AUDIO_OPTION $P_RTSP_PORT $RTSP_USER $RTSP_PASSWORD $RTSP_AUDIO_BC $NR_LEVEL > /dev/null &
         fi
 
-        WD_COUNT=$(ps | grep wd.sh | grep -v grep | grep -c ^)
-        if [ $WD_COUNT -eq 0 ]; then
-            (sleep 30; $YI_HACK_PREFIX/script/wd.sh >/dev/null) &
-        fi
+        start_rtsp_watchdog
     fi
+}
+
+start_rtsp_watchdog()
+{
+    WD_COUNT=$(ps | grep wd.sh | grep -v grep | grep -c ^)
+    if [ $WD_COUNT -gt 0 ]; then
+        return
+    fi
+
+    if [ -f "$RTSP_WD_PID_FILE" ]; then
+        WD_PID=$(cat "$RTSP_WD_PID_FILE")
+        if [ ! -z "$WD_PID" ] && kill -0 "$WD_PID" 2>/dev/null; then
+            return
+        fi
+        rm -f "$RTSP_WD_PID_FILE"
+    fi
+
+    # Detach the whole delayed watchdog launcher from a CGI caller.
+    # Keeping stdout/stderr inherited here can keep the HTTP response open
+    # until the 30 second delay expires.
+    (
+        sleep 30
+        exec $YI_HACK_PREFIX/script/wd.sh
+    ) </dev/null >/dev/null 2>&1 &
+
+    echo $! > "$RTSP_WD_PID_FILE"
+}
+
+stop_rtsp_watchdog()
+{
+    if [ -f "$RTSP_WD_PID_FILE" ]; then
+        WD_PID=$(cat "$RTSP_WD_PID_FILE")
+        if [ ! -z "$WD_PID" ]; then
+            kill "$WD_PID" 2>/dev/null
+        fi
+        rm -f "$RTSP_WD_PID_FILE"
+    fi
+
+    killall -q wd.sh
 }
 
 stop_rtsp()
 {
-    killall wd.sh
-    killall $RTSP_DAEMON
+    stop_rtsp_watchdog
+
+    # Stop both the RTSP server and the producer processes. Leaving the
+    # grabbers alive across start/stop cycles can accumulate stale producers
+    # and increase load on the camera.
+    killall -q $RTSP_DAEMON
+    killall -q h264grabber_l
+    killall -q h264grabber_h
 }
 
 start_onvif()
@@ -515,7 +555,11 @@ elif [ "$ACTION" == "stop" ] ; then
     fi
 elif [ "$ACTION" == "status" ] ; then
     if [ "$NAME" == "rtsp" ]; then
-        RES=$(ps_program rRTSPServer)
+        if [ ! -z "$RTSP_DAEMON" ]; then
+            RES=$(ps_program $RTSP_DAEMON)
+        else
+            RES="stopped"
+        fi
     elif [ "$NAME" == "onvif" ]; then
         RES=$(ps_program onvif_notify_server)
     elif [ "$NAME" == "wsdd" ]; then
@@ -529,7 +573,11 @@ elif [ "$ACTION" == "status" ] ; then
     elif [ "$NAME" == "mp4record" ]; then
         RES=$(ps_program mp4record)
     elif [ "$NAME" == "all" ]; then
-        RES=$(ps_program rRTSPServer)
+        if [ ! -z "$RTSP_DAEMON" ]; then
+            RES=$(ps_program $RTSP_DAEMON)
+        else
+            RES="stopped"
+        fi
     fi
 fi
 
