@@ -178,6 +178,9 @@ start_rtsp()
         /tmp/sd/yi-hack/bin/go2rtc -c /tmp/go2rtc.yaml -d
     elif [ "$RTSP_ALT" == "alternative" ]; then
 
+        # rtsp_server_yi accepts only its own RTSP/audio/auth options.
+        # Model selection is handled by the h264 grabbers; the alternative
+        # server does not implement the -m, -n or -b options.
         CODEC_LOW=$(cat /tmp/lowres)
         if [ ! -z $CODEC_LOW ]; then
             CODEC_LOW="-c "$CODEC_LOW
@@ -190,16 +193,16 @@ start_rtsp()
         if [[ $RTSP_RES == "low" ]]; then
             h264grabber_l -m $MODEL_SUFFIX -r low  -f &
             sleep 1
-            $RTSP_DAEMON -m $MODEL_SUFFIX -r low $CODEC_LOW $RTSP_AUDIO_OPTION $P_RTSP_PORT $RTSP_USER $RTSP_PASSWORD $RTSP_AUDIO_BC $NR_LEVEL > /dev/null &
+            $RTSP_DAEMON -r low $CODEC_LOW $RTSP_AUDIO_OPTION $P_RTSP_PORT $RTSP_USER $RTSP_PASSWORD > /dev/null &
         elif [[ $RTSP_RES == "high" ]]; then
             h264grabber_h -m $MODEL_SUFFIX -r high -f &
             sleep 1
-            $RTSP_DAEMON -m $MODEL_SUFFIX -r high $CODEC_HIGH $RTSP_AUDIO_OPTION $P_RTSP_PORT $RTSP_USER $RTSP_PASSWORD $RTSP_AUDIO_BC $NR_LEVEL > /dev/null &
+            $RTSP_DAEMON -r high $CODEC_HIGH $RTSP_AUDIO_OPTION $P_RTSP_PORT $RTSP_USER $RTSP_PASSWORD > /dev/null &
         elif [[ $RTSP_RES == "both" ]]; then
             h264grabber_l -m $MODEL_SUFFIX -r low -f &
             h264grabber_h -m $MODEL_SUFFIX -r high -f &
             sleep 1
-            $RTSP_DAEMON -m $MODEL_SUFFIX -r both $CODEC_LOW $CODEC_HIGH $RTSP_AUDIO_OPTION $P_RTSP_PORT $RTSP_USER $RTSP_PASSWORD $RTSP_AUDIO_BC $NR_LEVEL > /dev/null &
+            $RTSP_DAEMON -r both $CODEC_LOW $CODEC_HIGH $RTSP_AUDIO_OPTION $P_RTSP_PORT $RTSP_USER $RTSP_PASSWORD > /dev/null &
         fi
 
         start_rtsp_watchdog
