@@ -284,6 +284,24 @@ start_onvif()
 {
     # If "null" use default
 
+    # Keep ONVIF video metadata aligned with the codecs discovered by the
+    # RTSP grabber. The h305r / IE80 high stream is H.265 while the low
+    # stream is H.264, so hard-coding H.264 for every profile is incorrect.
+    ONVIF_VIDEO_TYPE_LOW="H264"
+    ONVIF_VIDEO_TYPE_HIGH="H264"
+
+    if [ -f /tmp/lowres ]; then
+        case "$(cat /tmp/lowres)" in
+            h265|H265) ONVIF_VIDEO_TYPE_LOW="H265" ;;
+        esac
+    fi
+
+    if [ -f /tmp/highres ]; then
+        case "$(cat /tmp/highres)" in
+            h265|H265) ONVIF_VIDEO_TYPE_HIGH="H265" ;;
+        esac
+    fi
+
     if [[ "$2" == "null" ]]; then
         ONVIF_WM_SNAPSHOT=$(get_config ONVIF_WM_SNAPSHOT)
         WATERMARK="&watermark="$ONVIF_WM_SNAPSHOT
@@ -296,14 +314,14 @@ start_onvif()
         ONVIF_PROFILE=$1
     fi
     if [[ $ONVIF_PROFILE == "high" ]]; then
-        ONVIF_PROFILE_0="name=Profile_0\nwidth=1920\nheight=1080\nurl=rtsp://$RTSP_USERPWD%s$D_RTSP_PORT/ch0_0.h264\nsnapurl=http://$RTSP_USERPWD%s$D_HTTPD_PORT/cgi-bin/snapshot.sh?res=high$WATERMARK\ntype=H264\n$ONVIF_AUDIO_ENCODER\n$ONVIF_AUDIO_DECODER"
+        ONVIF_PROFILE_0="name=Profile_0\nwidth=1920\nheight=1080\nurl=rtsp://$RTSP_USERPWD%s$D_RTSP_PORT/ch0_0.h264\nsnapurl=http://$RTSP_USERPWD%s$D_HTTPD_PORT/cgi-bin/snapshot.sh?res=high$WATERMARK\ntype=$ONVIF_VIDEO_TYPE_HIGH\n$ONVIF_AUDIO_ENCODER\n$ONVIF_AUDIO_DECODER"
     fi
     if [[ $ONVIF_PROFILE == "low" ]]; then
-        ONVIF_PROFILE_1="name=Profile_1\nwidth=640\nheight=360\nurl=rtsp://$RTSP_USERPWD%s$D_RTSP_PORT/ch0_1.h264\nsnapurl=http://$RTSP_USERPWD%s$D_HTTPD_PORT/cgi-bin/snapshot.sh?res=low$WATERMARK\ntype=H264\n$ONVIF_AUDIO_ENCODER\n$ONVIF_AUDIO_DECODER"
+        ONVIF_PROFILE_1="name=Profile_1\nwidth=640\nheight=360\nurl=rtsp://$RTSP_USERPWD%s$D_RTSP_PORT/ch0_1.h264\nsnapurl=http://$RTSP_USERPWD%s$D_HTTPD_PORT/cgi-bin/snapshot.sh?res=low$WATERMARK\ntype=$ONVIF_VIDEO_TYPE_LOW\n$ONVIF_AUDIO_ENCODER\n$ONVIF_AUDIO_DECODER"
     fi
     if [[ $ONVIF_PROFILE == "both" ]]; then
-        ONVIF_PROFILE_0="name=Profile_0\nwidth=1920\nheight=1080\nurl=rtsp://$RTSP_USERPWD%s$D_RTSP_PORT/ch0_0.h264\nsnapurl=http://$RTSP_USERPWD%s$D_HTTPD_PORT/cgi-bin/snapshot.sh?res=high$WATERMARK\ntype=H264\n$ONVIF_AUDIO_ENCODER\n$ONVIF_AUDIO_DECODER"
-        ONVIF_PROFILE_1="name=Profile_1\nwidth=640\nheight=360\nurl=rtsp://$RTSP_USERPWD%s$D_RTSP_PORT/ch0_1.h264\nsnapurl=http://$RTSP_USERPWD%s$D_HTTPD_PORT/cgi-bin/snapshot.sh?res=low$WATERMARK\ntype=H264\n$ONVIF_AUDIO_ENCODER\n$ONVIF_AUDIO_DECODER"
+        ONVIF_PROFILE_0="name=Profile_0\nwidth=1920\nheight=1080\nurl=rtsp://$RTSP_USERPWD%s$D_RTSP_PORT/ch0_0.h264\nsnapurl=http://$RTSP_USERPWD%s$D_HTTPD_PORT/cgi-bin/snapshot.sh?res=high$WATERMARK\ntype=$ONVIF_VIDEO_TYPE_HIGH\n$ONVIF_AUDIO_ENCODER\n$ONVIF_AUDIO_DECODER"
+        ONVIF_PROFILE_1="name=Profile_1\nwidth=640\nheight=360\nurl=rtsp://$RTSP_USERPWD%s$D_RTSP_PORT/ch0_1.h264\nsnapurl=http://$RTSP_USERPWD%s$D_HTTPD_PORT/cgi-bin/snapshot.sh?res=low$WATERMARK\ntype=$ONVIF_VIDEO_TYPE_LOW\n$ONVIF_AUDIO_ENCODER\n$ONVIF_AUDIO_DECODER"
     fi
 
     ONVIF_SRVD_CONF="/tmp/onvif_simple_server.conf"
