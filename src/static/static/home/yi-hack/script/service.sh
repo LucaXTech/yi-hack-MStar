@@ -245,8 +245,9 @@ start_rtsp_watchdog()
     # Keeping stdout/stderr inherited here can keep the HTTP response open
     # until the 30 second delay expires.
     (
-        sleep 30
-        exec $YI_HACK_PREFIX/script/wd.sh
+        trap 'rm -f "$RTSP_WD_PID_FILE"' EXIT
+        sleep 30 || exit
+        $YI_HACK_PREFIX/script/wd.sh
     ) </dev/null >/dev/null 2>&1 &
 
     echo $! > "$RTSP_WD_PID_FILE"
@@ -272,7 +273,9 @@ stop_rtsp()
     # Stop both the RTSP server and the producer processes. Leaving the
     # grabbers alive across start/stop cycles can accumulate stale producers
     # and increase load on the camera.
-    killall -q $RTSP_DAEMON
+    if [ ! -z "$RTSP_DAEMON" ]; then
+        killall -q "$RTSP_DAEMON"
+    fi
     killall -q h264grabber_l
     killall -q h264grabber_h
 }
@@ -462,7 +465,7 @@ stop_ftpd()
 
 ps_program()
 {
-    PS_PROGRAM=$(ps | grep $1 | grep -v grep | grep -c ^)
+    PS_PROGRAM=$(ps | grep "$1" | grep -v grep | grep -c ^)
     if [ $PS_PROGRAM -gt 0 ]; then
         echo "started"
     else
@@ -556,7 +559,7 @@ elif [ "$ACTION" == "stop" ] ; then
 elif [ "$ACTION" == "status" ] ; then
     if [ "$NAME" == "rtsp" ]; then
         if [ ! -z "$RTSP_DAEMON" ]; then
-            RES=$(ps_program $RTSP_DAEMON)
+            RES=$(ps_program "$RTSP_DAEMON")
         else
             RES="stopped"
         fi
@@ -574,7 +577,7 @@ elif [ "$ACTION" == "status" ] ; then
         RES=$(ps_program mp4record)
     elif [ "$NAME" == "all" ]; then
         if [ ! -z "$RTSP_DAEMON" ]; then
-            RES=$(ps_program $RTSP_DAEMON)
+            RES=$(ps_program "$RTSP_DAEMON")
         else
             RES="stopped"
         fi
