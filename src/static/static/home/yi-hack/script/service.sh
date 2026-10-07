@@ -245,9 +245,27 @@ start_rtsp_watchdog()
     # Keeping stdout/stderr inherited here can keep the HTTP response open
     # until the 30 second delay expires.
     (
-        trap 'rm -f "$RTSP_WD_PID_FILE"' EXIT
-        sleep 30 || exit
-        $YI_HACK_PREFIX/script/wd.sh
+        SLEEP_PID=""
+
+        cleanup_rtsp_watchdog_launcher()
+        {
+            if [ ! -z "$SLEEP_PID" ]; then
+                kill "$SLEEP_PID" 2>/dev/null
+            fi
+            rm -f "$RTSP_WD_PID_FILE"
+        }
+
+        trap 'cleanup_rtsp_watchdog_launcher; exit 0' HUP INT TERM
+        trap 'cleanup_rtsp_watchdog_launcher' EXIT
+
+        sleep 30 &
+        SLEEP_PID=$!
+        wait "$SLEEP_PID" || exit
+        SLEEP_PID=""
+
+        # Replace the launcher so the pid file continues to identify the
+        # watchdog process after the startup delay.
+        exec $YI_HACK_PREFIX/script/wd.sh
     ) </dev/null >/dev/null 2>&1 &
 
     echo $! > "$RTSP_WD_PID_FILE"
