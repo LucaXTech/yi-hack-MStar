@@ -17,6 +17,36 @@ COUNTER_L=0
 COUNTER_LIMIT=10
 INTERVAL=10
 
+FAILSAFE_COUNTER=0
+WIFI_FAIL_LIMIT=6
+RMM_FAIL_COUNTER=0
+RMM_FAIL_LIMIT=3
+
+RUNTIME_LOG="/tmp/yi-hack-watchdog.log"
+LAST_REBOOT_REASON="$YI_HACK_PREFIX/etc/last_watchdog_reboot"
+
+log_event()
+{
+    UPTIME_S=$(cut -d. -f1 /proc/uptime 2>/dev/null)
+    echo "$(date +'%Y-%m-%d %H:%M:%S') uptime_s=${UPTIME_S:-unknown} $*" >> "$RUNTIME_LOG"
+
+    if [ -f "$RUNTIME_LOG" ]; then
+        LOG_SIZE=$(wc -c < "$RUNTIME_LOG" 2>/dev/null)
+        if [ ! -z "$LOG_SIZE" ] && [ "$LOG_SIZE" -gt 32768 ]; then
+            tail -n 100 "$RUNTIME_LOG" > "$RUNTIME_LOG.tmp" && mv "$RUNTIME_LOG.tmp" "$RUNTIME_LOG"
+        fi
+    fi
+}
+
+record_reboot_reason()
+{
+    UPTIME_S=$(cut -d. -f1 /proc/uptime 2>/dev/null)
+    REASON="$(date +'%Y-%m-%d %H:%M:%S') uptime_s=${UPTIME_S:-unknown} $*"
+    echo "$REASON" > "$LAST_REBOOT_REASON"
+    sync
+    log_event "reboot_reason=$*"
+}
+
 get_camera_config()
 {
     key=$1
@@ -116,44 +146,39 @@ check_rtsp()
 check_rtsp_alt()
 {
     if [[ $(get_camera_config SWITCH_ON) == "yes" ]] ; then
-        #  echo "$(date +'%Y-%m-%d %H:%M:%S') - Checking RTSP process..." >> $LOG_FILE
         LISTEN=`netstat -an 2>&1 | grep ":$RTSP_PORT_NUMBER " | grep LISTEN | grep -c ^`
         CPU_1_L=`top -b -n 2 -d 1 | grep h264grabber_l | grep -v grep | tail -n 1 | awk '{print $8}'`
         CPU_1_H=`top -b -n 2 -d 1 | grep h264grabber_h | grep -v grep | tail -n 1 | awk '{print $8}'`
         CPU_2=`top -b -n 2 -d 1 | grep rtsp_server_yi | grep -v grep | tail -n 1 | awk '{print $8}'`
 
-        if [ $LISTEN -eq 0 ]; then
-            echo "$(date +'%Y-%m-%d %H:%M:%S') - Restarting rtsp process" >> $LOG_FILE
+        RESTART_REASON=""
+
+        if [ "$LISTEN" -eq 0 ]; then
+            RESTART_REASON="port_not_listening"
+        elif [[ $(get_config RTSP_STREAM) == "low" ]] || [[ $(get_config RTSP_STREAM) == "both" ]]; then
+            if [ "$CPU_1_L" == "" ] || [ "$CPU_2" == "" ]; then
+                RESTART_REASON="low_stream_process_missing"
+            fi
+        fi
+
+        if [ -z "$RESTART_REASON" ]; then
+            if [[ $(get_config RTSP_STREAM) == "high" ]] || [[ $(get_config RTSP_STREAM) == "both" ]]; then
+                if [ "$CPU_1_H" == "" ] || [ "$CPU_2" == "" ]; then
+                    RESTART_REASON="high_stream_process_missing"
+                fi
+            fi
+        fi
+
+        if [ ! -z "$RESTART_REASON" ]; then
+            log_event "rtsp_alt_restart reason=$RESTART_REASON"
             killall -q rtsp_server_yi
             killall -q h264grabber_l
             killall -q h264grabber_h
             sleep 1
             restart_rtsp
         fi
-        if [[ $(get_config RTSP_STREAM) == "low" ]] || [[ $(get_config RTSP_STREAM) == "both" ]]; then
-            if [ "$CPU_1_L" == "" ] || [ "$CPU_2" == "" ]; then
-                echo "$(date +'%Y-%m-%d %H:%M:%S') - No running processes for low res, restarting..." >> $LOG_FILE
-                killall -q rtsp_server_yi
-                killall -q h264grabber_l
-                killall -q h264grabber_h
-                sleep 1
-                restart_rtsp
-            fi
-            COUNTER_L=0
-        fi
-        if [[ $(get_config RTSP_STREAM) == "high" ]] || [[ $(get_config RTSP_STREAM) == "both" ]]; then
-            if [ "$CPU_1_H" == "" ] || [ "$CPU_2" == "" ]; then
-                echo "$(date +'%Y-%m-%d %H:%M:%S') - No running processes for high res, restarting..." >> $LOG_FILE
-                killall -q rtsp_server_yi
-                killall -q h264grabber_l
-                killall -q h264grabber_h
-                sleep 1
-                restart_rtsp
-            fi
-            COUNTER_H=0
-        fi
     else
-        echo "Camera is swiched off no rtsp restart needed" >> $LOG_FILE
+        log_event "camera_switched_off rtsp_restart_skipped"
     fi
 }
 
@@ -203,13 +228,21 @@ check_rtsp_go2rtc()
 
 check_rmm()
 {
-#  echo "$(date +'%Y-%m-%d %H:%M:%S') - Checking rmm process..." >> $LOG_FILE
     PS=`ps | grep rmm | grep -v grep | grep -c ^`
 
-    if [ $PS -eq 0 ]; then
-        echo "check_rmm failed, reboot!" >> $LOG_FILE
-        sync
-        reboot -f
+    if [ "$PS" -eq 0 ]; then
+        RMM_FAIL_COUNTER=$((RMM_FAIL_COUNTER + 1))
+        log_event "rmm_missing consecutive=$RMM_FAIL_COUNTER"
+
+        if [ "$RMM_FAIL_COUNTER" -ge "$RMM_FAIL_LIMIT" ]; then
+            record_reboot_reason "rmm_missing consecutive=$RMM_FAIL_COUNTER"
+            reboot -f
+        fi
+    else
+        if [ "$RMM_FAIL_COUNTER" -gt 0 ]; then
+            log_event "rmm_recovered after=$RMM_FAIL_COUNTER"
+        fi
+        RMM_FAIL_COUNTER=0
     fi
 }
 
@@ -226,26 +259,32 @@ check_mqtt()
 
 check_wifi()
 {
-    if ! wpa_cli -i wlan0 status 2>&1 | grep -q "wpa_state=COMPLETED"; then
-        if [ -e "$LOGFILE" ]; then
-            /usr/bin/tail -n 145 "$LOGFILE" > "$LOGFILE.tmp" && mv "$LOGFILE.tmp" "$LOGFILE"
+    WIFI_STATUS=$(wpa_cli -i wlan0 status 2>&1)
+    WIFI_STATE=$(echo "$WIFI_STATUS" | grep '^wpa_state=' | cut -d= -f2)
+
+    if echo "$WIFI_STATUS" | grep -q "wpa_state=COMPLETED"; then
+        if [ "$FAILSAFE_COUNTER" -gt 0 ]; then
+            log_event "wifi_recovered after=$FAILSAFE_COUNTER state=${WIFI_STATE:-unknown}"
         fi
-        echo -e "$(date): Wifi connection lost:\n$(wpa_cli -i wlan0 status 2>&1)" >> "$LOGFILE"
-        failsafecounter=$((failsafecounter + 1))
-        if [ "$failsafecounter" -ge 6 ]; then
-            echo -e "$(date): Wifi connection still could't be restored. Restarting." >> "$LOGFILE"
-            sync
-            reboot -f
-        else
-            echo -e "$(date): Attempting reconnect." >> "$LOGFILE"
-            sleep 2
-            ifconfig wlan0 down
-            sleep 1
-            ifconfig wlan0 up
-            sleep 1
-            wpa_cli -i wlan0 reconfigure
-        fi
+        FAILSAFE_COUNTER=0
+        return
     fi
+
+    FAILSAFE_COUNTER=$((FAILSAFE_COUNTER + 1))
+    log_event "wifi_disconnected consecutive=$FAILSAFE_COUNTER state=${WIFI_STATE:-unknown}"
+
+    if [ "$FAILSAFE_COUNTER" -ge "$WIFI_FAIL_LIMIT" ]; then
+        record_reboot_reason "wifi_unavailable consecutive=$FAILSAFE_COUNTER state=${WIFI_STATE:-unknown}"
+        reboot -f
+    fi
+
+    log_event "wifi_reconnect_attempt consecutive=$FAILSAFE_COUNTER"
+    sleep 2
+    ifconfig wlan0 down
+    sleep 1
+    ifconfig wlan0 up
+    sleep 1
+    wpa_cli -i wlan0 reconfigure >/dev/null 2>&1
 }
 
 if [[ $(get_config RTSP) == "no" ]] ; then
@@ -263,7 +302,7 @@ fi
 
 RTSP_ALT=$(get_config RTSP_ALT)
 
-echo "$(date +'%Y-%m-%d %H:%M:%S') - Starting RTSP watchdog..." >> $LOG_FILE
+log_event "watchdog_started rtsp_alt=$RTSP_ALT"
 
 while true
 do
